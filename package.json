@@ -1,9 +1,13 @@
 {
-  "name": "@CHANGE_ME/sfmc-module-example",
+  "name": "@sfmc-bds/module-economy",
   "version": "0.1.0",
   "type": "module",
-  "description": "SFMC module skeleton — rename with `node scripts/rename.mjs <id> --scope <npm-user>`.",
+  "description": "SAPI module: 经济系统 - 月度白皮书 + 账户/转账/日常任务。",
   "main": "sapi/src/index.ts",
+  "exports": {
+    ".": "./sapi/src/index.ts",
+    "./client": "./sapi/src/client.ts"
+  },
   "files": [
     "sapi",
     "scripts",

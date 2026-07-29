@@ -1,17 +1,86 @@
 {
   "$schema": "../../node_modules/@sfmc-bds/sdk/schemas/sapi-manifest.v2.schema.json",
   "schemaVersion": 2,
-  "id": "feature-example",
-  "name": "示例模块",
+  "id": "feature-economy",
+  "name": "经济系统",
   "type": "feature",
-  "configKey": "example",
+  "configKey": "economy",
   "requires": [],
   "permissions": [
-    "config:read:example"
+    "db:read:sfmc_economy_accounts",
+    "db:write:sfmc_economy_accounts",
+    "db:read:sfmc_economy_transactions",
+    "db:write:sfmc_economy_transactions",
+    "db:read:sfmc_economy_daily_tasks",
+    "db:write:sfmc_economy_daily_tasks"
   ],
   "services": {
-    "provides": [],
+    "provides": [
+      {
+        "name": "economy.account.get",
+        "input": {
+          "type": "object"
+        },
+        "output": {
+          "type": "object"
+        }
+      },
+      {
+        "name": "economy.account.credit",
+        "input": {
+          "type": "object"
+        },
+        "output": {
+          "type": "object"
+        }
+      },
+      {
+        "name": "economy.account.debit",
+        "input": {
+          "type": "object"
+        },
+        "output": {
+          "type": "object"
+        }
+      },
+      {
+        "name": "economy.account.transfer",
+        "input": {
+          "type": "object"
+        },
+        "output": {
+          "type": "object"
+        }
+      },
+      {
+        "name": "economy.dailyTasks.list",
+        "input": {
+          "type": "object"
+        },
+        "output": {
+          "type": "object"
+        }
+      },
+      {
+        "name": "economy.dailyTasks.submit",
+        "input": {
+          "type": "object"
+        },
+        "output": {
+          "type": "object"
+        }
+      },
+      {
+        "name": "economy.stats.monthly",
+        "input": {
+          "type": "object"
+        },
+        "output": {
+          "type": "object"
+        }
+      }
+    ],
     "requires": []
   },
-  "notes": "由 sfmc-module-template 生成的最小模块；运行 node scripts/rename.mjs <kebab-id> 改为你的 id。"
+  "notes": "v2 经济系统 keystone。对外简洁 API:`import { economy } from \"@sfmc-bds/module-economy/client\"`(account.get/credit/debit/transfer + dailyTasks.list/submit + stats.monthly;事务内用 economy.account.inTx(tx))。业务逻辑在 db-server/src/domain/economy.ts,经 service handler 暴露;SAPI 端另做月度白皮书广播。其他模块禁止直读写 sfmc_economy_*;SDK Money 仅作玩家侧余额缓存助手。"
 }
