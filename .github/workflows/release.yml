@@ -1,0 +1,167 @@
+name: Release
+
+on:
+  # 手动触发：Actions 页面 Run workflow，可选版本号（默认 patch）
+  workflow_dispatch:
+    inputs:
+      bump:
+        description: "Semver bump level (patch | minor | major | custom)"
+        required: true
+        default: "patch"
+        type: choice
+        options: [patch, minor, major, custom]
+      custom_version:
+        description: "当 bump=custom 时使用（如 2.0.0-rc.1）"
+        required: false
+        type: string
+      dry_run:
+        description: "仅打 tgz 上传为 artifact，不真 publish 到 npm"
+        required: false
+        default: "false"
+        type: boolean
+
+  # 自动触发：push tag 如 v1.2.3 → 严格按 tag 名 publish（不 bump）
+  push:
+    tags: ["v*.*.*", "v*.*.*-*"]
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: write      # 创建 / 推送 git tag
+  id-token: write      # npm Trusted Publishing（OIDC）
+  pull-requests: write # 自动开 PR 到 sfmc-modules 薄 index
+
+jobs:
+  release:
+    name: Build + Publish + Index PR
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22.13"
+          registry-url: "https://registry.npmjs.org/"
+
+      - name: 准备 bump 版本
+        id: bump
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            # tag 触发：版本号 = tag 名（去掉 v 前缀）
+            TAG=${GITHUB_REF#refs/tags/v}
+            echo "version=$TAG" >> "$GITHUB_OUTPUT"
+            echo "→ tag 触发：版本 $TAG（不 bump）"
+          else
+            # workflow_dispatch：按 inputs.bump 升号
+            LEVEL="${{ inputs.bump }}"
+            CURRENT=$(node -p "require('./package.json').version")
+            case "$LEVEL" in
+              patch) NEW=$(node -e "const [a,b,c]=require('./package.json').version.split('.').map(Number);console.log([a,b,c+1].join('.'))") ;;
+              minor) NEW=$(node -e "const [a,b,c]=require('./package.json').version.split('.').map(Number);console.log([a,b+1,0].join('.'))") ;;
+              major) NEW=$(node -e "const [a,b,c]=require('./package.json').version.split('.').map(Number);console.log([a+1,0,0].join('.'))") ;;
+              custom) NEW="${{ inputs.custom_version }}" ;;
+              *) echo "未知 bump level: $LEVEL"; exit 1 ;;
+            esac
+            echo "→ dispatch 触发：bump $CURRENT → $NEW"
+            echo "version=$NEW" >> "$GITHUB_OUTPUT"
+          fi
+          # 写入 package.json
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='${{ steps.bump.outputs.version }}';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')"
+
+      - name: 安装依赖 + 校验
+        run: |
+          npm ci
+          npm run typecheck
+          npm test
+
+      - name: 打 tgz（产物）
+        run: npm pack --dry-run
+
+      - name: 推 git tag（dispatch 触发时）
+        if: github.event_name == 'workflow_dispatch'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add package.json
+          git commit -m "chore(release): bump to v${{ steps.bump.outputs.version }}"
+          git tag "v${{ steps.bump.outputs.version }}"
+          git push origin "v${{ steps.bump.outputs.version }}"
+
+      - name: 上传 tgz 为 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: module-tgz-${{ steps.bump.outputs.version }}
+          path: "*.tgz"
+          retention-days: 14
+
+      # npm publish —— 默认走 Trusted Publishing（OIDC，无需 NPM_TOKEN）。
+      # 注：作者的 scope 是 @<username>/*（与平台隔离），所以这里允许作者的 npm org owner 配 Trusted Publisher。
+      - name: Publish 到 npm
+        if: inputs.dry_run != 'true'
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }} # 兜底；优先用 Trusted Publishing 时可省略
+        run: |
+          if [[ -z "${NODE_AUTH_TOKEN}" ]]; then
+            echo "→ 使用 npm Trusted Publishing（OIDC）"
+          else
+            echo "→ 使用 NPM_TOKEN fallback"
+          fi
+          npm config set //registry.npmjs.org/:_authToken "${NODE_AUTH_TOKEN:-}"
+          npm publish --access public --provenance
+        env:
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+      - name: 在 sfmc-modules 仓开 PR 登记薄 index
+        if: inputs.dry_run != 'true' && success()
+        env:
+          GH_TOKEN: ${{ secrets.WORKFLOW_PAT }} # 用户预配的 PAT，能 fork + 跨仓开 PR
+          PKG_NAME: ${{ github.event.repository.name }}
+          PKG_VERSION: ${{ steps.bump.outputs.version }}
+          INDEX_REPO: "Tanya7z/sfmc-modules"
+        run: |
+          if [[ -z "${GH_TOKEN}" ]]; then
+            echo "→ WORKFLOW_PAT 未配；跳过薄 index PR（手动开）"
+            exit 0
+          fi
+          BRANCH="publish/${PKG_NAME}-${PKG_VERSION}"
+          gh repo fork "${INDEX_REPO}" --remote-name=index-fork --clone=false
+          WORKDIR=$(mktemp -d)
+          gh repo clone "${GITHUB_REPOSITORY}" "${WORKDIR}" -- --depth=1
+          cd "${WORKDIR}"
+          NPM_NAME=$(node -p "require('./package.json').name")
+          FOLDER_ID=$(node -e "const n=require('./package.json').name;const m=String(n).match(/^(?:@[^/]+\\/)?(?:sfmc-)?module-(.+)$/);console.log(m?m[1]:'${PKG_NAME}')")
+          git remote add index-fork "https://x-access-token:${GH_TOKEN}@github.com/Tanya7z/sfmc-modules.git" || true
+          git fetch index-fork main
+          git checkout -b "${BRANCH}" index-fork/main
+          # 幂等 upsert（map v2）
+          node -e '
+            const fs=require("fs");
+            let p={version:2,modules:{}};
+            if (fs.existsSync("index.json")) p=JSON.parse(fs.readFileSync("index.json","utf8"));
+            const modules = (p.modules && !Array.isArray(p.modules)) ? {...p.modules} : {};
+            const id=process.argv[1]; const npm=process.argv[2]; const ver=process.argv[3];
+            if (modules[id]) { console.log("already exist:", id); process.exit(0); }
+            modules[id] = { npm, version: ver, sdk: ">=0.2.0", timestamp: Date.now() };
+            const sorted = {};
+            for (const k of Object.keys(modules).sort()) sorted[k] = modules[k];
+            fs.writeFileSync("index.json", JSON.stringify({ version: 2, modules: sorted }, null, 2) + "\n");
+          ' "${FOLDER_ID}" "${NPM_NAME}" "${PKG_VERSION}"
+          git add index.json
+          git -c user.name="github-actions[bot]" -c user.email="github-actions[bot]@users.noreply.github.com" commit -m "chore(index): ${FOLDER_ID}@${PKG_VERSION}" || true
+          git push -u index-fork "${BRANCH}" || true
+          gh pr create --repo "${INDEX_REPO}" --head "${GITHUB_REPOSITORY_OWNER}:${BRANCH}" --title "chore(index): ${FOLDER_ID}@${PKG_VERSION}" --body "Automated release of \`${NPM_NAME}@${PKG_VERSION}\`." || true
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "### Release Summary"
+            echo "- version: \`${{ steps.bump.outputs.version }}\`"
+            echo "- trigger: \`${{ github.event_name }}\`"
+            echo "- ref: \`${{ github.ref }}\`"
+            echo "- commit: \`${{ github.sha }}\`"
+          } >> "$GITHUB_STEP_SUMMARY"
