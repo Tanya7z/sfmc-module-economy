@@ -69,8 +69,11 @@ jobs:
             echo "→ dispatch 触发：bump $CURRENT → $NEW"
             echo "version=$NEW" >> "$GITHUB_OUTPUT"
           fi
-          # 写入 package.json
-          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='${{ steps.bump.outputs.version }}';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')"
+          # 写入 package.json（同 step 内用 shell 变量，勿用 steps.outputs 自引用）
+          VER="${{ steps.bump.outputs.version }}"
+          if [[ -z "$VER" ]]; then VER="$NEW"; fi
+          if [[ -z "$VER" && "${{ github.event_name }}" == "push" ]]; then VER="${GITHUB_REF#refs/tags/v}"; fi
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version=process.argv[1];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')" "$VER"
 
       - name: 安装依赖 + 校验
         run: |
@@ -144,8 +147,11 @@ jobs:
             if (fs.existsSync("index.json")) p=JSON.parse(fs.readFileSync("index.json","utf8"));
             const modules = (p.modules && !Array.isArray(p.modules)) ? {...p.modules} : {};
             const id=process.argv[1]; const npm=process.argv[2]; const ver=process.argv[3];
-            if (modules[id]) { console.log("already exist:", id); process.exit(0); }
-            modules[id] = { npm, version: ver, sdk: ">=0.2.0", timestamp: Date.now() };
+            /* 迁仓场景：已有 repo+tag 条目时改为 upsert npm 字段 */
+            const prev = modules[id] && typeof modules[id] === "object" ? modules[id] : {};
+            modules[id] = { ...prev, npm, version: ver, sdk: ">=0.2.0", timestamp: Date.now() };
+            delete modules[id].repo;
+            delete modules[id].tag;
             const sorted = {};
             for (const k of Object.keys(modules).sort()) sorted[k] = modules[k];
             fs.writeFileSync("index.json", JSON.stringify({ version: 2, modules: sorted }, null, 2) + "\n");
