@@ -15,12 +15,12 @@ on:
         required: false
         type: string
       dry_run:
-        description: "仅打 tgz 上传为 artifact，不真 publish 到 npm"
+        description: "打 tgz 上传为 artifacts"
         required: false
-        default: "false"
+        default: false
         type: boolean
 
-  # 自动触发：push tag 如 v1.2.3 → 严格按 tag 名 publish（不 bump）
+  # 自动触发：push tag
   push:
     tags: ["v*.*.*", "v*.*.*-*"]
 
@@ -29,9 +29,9 @@ concurrency:
   cancel-in-progress: false
 
 permissions:
-  contents: write      # 创建 / 推送 git tag
-  id-token: write      # npm Trusted Publishing（OIDC）
-  pull-requests: write # 自动开 PR 到 sfmc-modules 薄 index
+  contents: write # 创建 / 推送 git tag
+  id-token: write # npm Trusted Publishing（OIDC）
+  pull-requests: write # 自动开 PR 到 sfmc-modules
 
 jobs:
   release:
@@ -51,29 +51,23 @@ jobs:
         id: bump
         run: |
           if [[ "${{ github.event_name }}" == "push" ]]; then
-            # tag 触发：版本号 = tag 名（去掉 v 前缀）
-            TAG=${GITHUB_REF#refs/tags/v}
-            echo "version=$TAG" >> "$GITHUB_OUTPUT"
-            echo "→ tag 触发：版本 $TAG（不 bump）"
+            VERSION=${GITHUB_REF#refs/tags/v}
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+            echo "→ tag 触发：版本 $VERSION"
           else
-            # workflow_dispatch：按 inputs.bump 升号
             LEVEL="${{ inputs.bump }}"
             CURRENT=$(node -p "require('./package.json').version")
             case "$LEVEL" in
-              patch) NEW=$(node -e "const [a,b,c]=require('./package.json').version.split('.').map(Number);console.log([a,b,c+1].join('.'))") ;;
-              minor) NEW=$(node -e "const [a,b,c]=require('./package.json').version.split('.').map(Number);console.log([a,b+1,0].join('.'))") ;;
-              major) NEW=$(node -e "const [a,b,c]=require('./package.json').version.split('.').map(Number);console.log([a+1,0,0].join('.'))") ;;
-              custom) NEW="${{ inputs.custom_version }}" ;;
+              patch) VERSION=$(node -e "const [a,b,c]=require('./package.json').version.split('.').map(Number);console.log([a,b,c+1].join('.'))") ;;
+              minor) VERSION=$(node -e "const [a,b,c]=require('./package.json').version.split('.').map(Number);console.log([a,b+1,0].join('.'))") ;;
+              major) VERSION=$(node -e "const [a,b,c]=require('./package.json').version.split('.').map(Number);console.log([a+1,0,0].join('.'))") ;;
+              custom) VERSION="${{ inputs.custom_version }}" ;;
               *) echo "未知 bump level: $LEVEL"; exit 1 ;;
             esac
-            echo "→ dispatch 触发：bump $CURRENT → $NEW"
-            echo "version=$NEW" >> "$GITHUB_OUTPUT"
+            echo "→ dispatch 触发：bump $CURRENT → $VERSION"
+            echo "version=$VERSION" >> "$GITHUB_OUTPUT"
           fi
-          # 写入 package.json（同 step 内用 shell 变量，勿用 steps.outputs 自引用）
-          VER="${{ steps.bump.outputs.version }}"
-          if [[ -z "$VER" ]]; then VER="$NEW"; fi
-          if [[ -z "$VER" && "${{ github.event_name }}" == "push" ]]; then VER="${GITHUB_REF#refs/tags/v}"; fi
-          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version=process.argv[1];fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')" "$VER"
+          node -e "const fs=require('fs');const p=JSON.parse(fs.readFileSync('package.json','utf8'));p.version='${VERSION}';fs.writeFileSync('package.json',JSON.stringify(p,null,2)+'\n')"
 
       - name: 安装依赖 + 校验
         run: |
@@ -81,7 +75,7 @@ jobs:
           npm run typecheck
           npm test
 
-      - name: 打 tgz（产物）
+      - name: 打包 tgz
         run: npm pack --dry-run
 
       - name: 推 git tag（dispatch 触发时）
@@ -107,6 +101,7 @@ jobs:
         if: inputs.dry_run != 'true'
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }} # 兜底；优先用 Trusted Publishing 时可省略
+          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
         run: |
           if [[ -z "${NODE_AUTH_TOKEN}" ]]; then
             echo "→ 使用 npm Trusted Publishing（OIDC）"
@@ -115,19 +110,17 @@ jobs:
           fi
           npm config set //registry.npmjs.org/:_authToken "${NODE_AUTH_TOKEN:-}"
           npm publish --access public --provenance
-        env:
-          FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
-      - name: 在 sfmc-modules 仓开 PR 登记薄 index
+      - name: 在 sfmc-modules 仓开 PR 登记 index
         if: inputs.dry_run != 'true' && success()
         env:
-          GH_TOKEN: ${{ secrets.WORKFLOW_PAT }} # 用户预配的 PAT，能 fork + 跨仓开 PR
+          GH_TOKEN: ${{ secrets.WORKFLOW_PAT}} # 用户预配的 PAT，能 fork + 跨仓开 PR
           PKG_NAME: ${{ github.event.repository.name }}
           PKG_VERSION: ${{ steps.bump.outputs.version }}
           INDEX_REPO: "Tanya7z/sfmc-modules"
         run: |
           if [[ -z "${GH_TOKEN}" ]]; then
-            echo "→ WORKFLOW_PAT 未配；跳过薄 index PR（手动开）"
+            echo "→ WORKFLOW_PAT 未配；跳过 index PR"
             exit 0
           fi
           BRANCH="publish/${PKG_NAME}-${PKG_VERSION}"
@@ -147,11 +140,8 @@ jobs:
             if (fs.existsSync("index.json")) p=JSON.parse(fs.readFileSync("index.json","utf8"));
             const modules = (p.modules && !Array.isArray(p.modules)) ? {...p.modules} : {};
             const id=process.argv[1]; const npm=process.argv[2]; const ver=process.argv[3];
-            /* 迁仓场景：已有 repo+tag 条目时改为 upsert npm 字段 */
-            const prev = modules[id] && typeof modules[id] === "object" ? modules[id] : {};
-            modules[id] = { ...prev, npm, version: ver, sdk: ">=0.2.0", timestamp: Date.now() };
-            delete modules[id].repo;
-            delete modules[id].tag;
+            if (modules[id]) { console.log("already exist:", id); process.exit(0); }
+            modules[id] = { npm, version: ver, sdk: ">=0.2.0", timestamp: Date.now() };
             const sorted = {};
             for (const k of Object.keys(modules).sort()) sorted[k] = modules[k];
             fs.writeFileSync("index.json", JSON.stringify({ version: 2, modules: sorted }, null, 2) + "\n");

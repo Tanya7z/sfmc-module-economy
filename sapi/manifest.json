@@ -1,5 +1,5 @@
 {
-  "$schema": "../../node_modules/@sfmc-bds/sdk/schemas/sapi-manifest.v2.schema.json",
+  "$schema": "https://cdn.jsdelivr.net/gh/DogeLakeDev/ScriptsForMinecraftServer@latest/modules/sdk/%40sfmc-sdk/schemas/sapi-manifest.v2.schema.json",
   "schemaVersion": 2,
   "id": "feature-economy",
   "name": "经济系统",
