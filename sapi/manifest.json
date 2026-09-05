@@ -1,18 +1,21 @@
 {
   "$schema": "https://cdn.jsdelivr.net/gh/DogeLakeDev/ScriptsForMinecraftServer@latest/modules/sdk/%40sfmc-sdk/schemas/sapi-manifest.v2.schema.json",
   "schemaVersion": 2,
-  "id": "feature-economy",
+  "id": "economy",
   "name": "经济系统",
-  "type": "feature",
   "configKey": "economy",
   "requires": [],
   "permissions": [
+    "config:read:economy",
     "db:read:sfmc_economy_accounts",
     "db:write:sfmc_economy_accounts",
     "db:read:sfmc_economy_transactions",
     "db:write:sfmc_economy_transactions",
-    "db:read:sfmc_economy_daily_tasks",
-    "db:write:sfmc_economy_daily_tasks"
+    "service:economy.account.get",
+    "service:economy.account.credit",
+    "service:economy.account.debit",
+    "service:economy.account.transfer",
+    "service:economy.stats.query"
   ],
   "services": {
     "provides": [
@@ -53,25 +56,7 @@
         }
       },
       {
-        "name": "economy.dailyTasks.list",
-        "input": {
-          "type": "object"
-        },
-        "output": {
-          "type": "object"
-        }
-      },
-      {
-        "name": "economy.dailyTasks.submit",
-        "input": {
-          "type": "object"
-        },
-        "output": {
-          "type": "object"
-        }
-      },
-      {
-        "name": "economy.stats.monthly",
+        "name": "economy.stats.query",
         "input": {
           "type": "object"
         },
@@ -82,5 +67,5 @@
     ],
     "requires": []
   },
-  "notes": "v2 经济系统 keystone。对外简洁 API:`import { economy } from \"@sfmc-bds/module-economy/client\"`(account.get/credit/debit/transfer + dailyTasks.list/submit + stats.monthly;事务内用 economy.account.inTx(tx))。业务逻辑在 db-server/src/domain/economy.ts,经 service handler 暴露;SAPI 端另做月度白皮书广播。其他模块禁止直读写 sfmc_economy_*;SDK Money 仅作玩家侧余额缓存助手。"
+  "notes": "计分板 sfmc_money 为唯一权威余额；accounts/transactions 仅作审计留档；无 dailyTasks / 白皮书。"
 }

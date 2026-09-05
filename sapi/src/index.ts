@@ -1,104 +1,123 @@
 /**
- * @sfmc-bds/module-economy — v2 入口
+ * @sfmc-bds/module-economy — 计分板权威经济中枢
  *
- * 提供 7 个 service (account.{get,credit,debit,transfer} + dailyTasks.{list,submit} + stats.monthly)。
- * 其他模块请 import { economy } from "@sfmc-bds/module-economy/client"，勿直操 sfmc_economy_*。
- *
- * 真正的业务逻辑仍在 db-server/src/domain/economy.ts。SAPI 端:
- *   - 对外简洁 API 见 client.ts
- *   - EconomyReport 月度白皮书保留(system.runTimeout / runInterval 调度)
+ * 生命周期：registerPermissions → registerCommands → registerEvents → init
+ * 对外仅经 service.provide：account.get/credit/debit/transfer + stats.query
  */
 
-import { system, world } from "@minecraft/server";
-import { debug, Msg } from "@sfmc-bds/sdk/sapi/runtime";
+import { system } from "@minecraft/server";
+import { config } from "@sfmc-bds/sdk/sapi/config";
 import { ModuleRegistry } from "@sfmc-bds/sdk/module-loader";
-import { economy } from "./client.js";
+import { debug } from "@sfmc-bds/sdk/sapi/runtime";
+import { service } from "@sfmc-bds/sdk/sapi/service";
+import {
+  defineEconomyTables,
+  flushPendingArchive,
+  reconcileAccount,
+} from "./archive.js";
+import {
+  configureScoreboard,
+  ensureObjective,
+  listScoreboardBalances,
+} from "./scoreboard.js";
+import {
+  handleCredit,
+  handleDebit,
+  handleGet,
+  handleStatsQuery,
+  handleTransfer,
+} from "./services.js";
 
-const MODULE_ID = "feature-economy";
+const MODULE_ID = "economy";
 
-function shuffleMonthStart(): number {
-  const now = new Date();
-  return new Date(now.getFullYear(), now.getMonth() + 1, 1, 8, 0, 0).getTime() - now.getTime();
+const unprovide: Array<() => void> = [];
+let reconcileRunId: number | undefined;
+let retryRunId: number | undefined;
+
+interface EconomyConfig {
+  objectiveId?: string;
+  objectiveDisplay?: string;
+  unitName?: string;
+  reconcileIntervalTicks?: number;
 }
 
-let monthlyTimer: number | undefined;
-
-function startMonthlyReport(): void {
-  if (monthlyTimer !== undefined) return;
-  const delay = Math.max(1, shuffleMonthStart() / 50);
-  monthlyTimer = system.runTimeout(() => {
-    monthlyTimer = undefined;
-    void publishMonthlyReport();
-    monthlyTimer = system.runInterval(() => void publishMonthlyReport(), 30 * 86400 * 20);
-  }, delay);
+async function loadConfig(): Promise<Required<EconomyConfig>> {
+  const all = (await config.getAll()) as EconomyConfig;
+  return {
+    objectiveId: all.objectiveId ?? "sfmc_money",
+    objectiveDisplay: all.objectiveDisplay ?? "节操",
+    unitName: all.unitName ?? "节操",
+    reconcileIntervalTicks: all.reconcileIntervalTicks ?? 12000,
+  };
 }
 
-function stopMonthlyReport(): void {
-  if (monthlyTimer !== undefined) {
-    try {
-      system.clearRun(monthlyTimer);
-    } catch {
-      /* ignore */
-    }
-    monthlyTimer = undefined;
-  }
-}
-
-async function publishMonthlyReport(): Promise<void> {
+async function runReconcile(): Promise<void> {
   try {
-    const stats = await economy.stats.monthly();
-    if (!stats) return;
-    const msg = [
-      `§e===== 经济白皮书 (${stats.id}) =====`,
-      `§7总发行量: §f${stats.total_issued} ${economy.unit}`,
-      `§7总销毁量: §f${stats.total_destroyed} ${economy.unit}`,
-      `§7总流通量: §f${stats.total_supply} ${economy.unit}`,
-      `§7活跃账户: §f${stats.active_accounts}`,
-      `§e==============================`,
-    ].join("\n");
-    for (const p of world.getAllPlayers()) {
-      Msg.info(msg, p);
+    for (const { accountId, balance } of listScoreboardBalances()) {
+      await reconcileAccount(accountId, balance);
     }
   } catch (err) {
-    debug.e("Economy", "monthly report failed", err instanceof Error ? err : new Error(String(err)));
+    debug.e("Economy", "reconcile failed", err instanceof Error ? err : new Error(String(err)));
   }
 }
 
 ModuleRegistry.register({
   id: MODULE_ID,
-  afterWorldLoad: false,
+  afterWorldLoad: true,
   lifecycle: {
     registerPermissions() {
-      // 内部 capability,无对外命令
+      // 无玩家命令面
+    },
+    registerCommands() {
+      // 无
+    },
+    registerEvents() {
+      // 无原生事件订阅
     },
     async init() {
-      startMonthlyReport();
-      debug.i("Economy", "init");
+      const cfg = await loadConfig();
+      configureScoreboard(cfg.objectiveId, cfg.objectiveDisplay);
+      ensureObjective();
+      await defineEconomyTables();
+
+      unprovide.push(service.provide("economy.account.get", (input) => handleGet(input)));
+      unprovide.push(service.provide("economy.account.credit", (input) => handleCredit(input)));
+      unprovide.push(service.provide("economy.account.debit", (input) => handleDebit(input)));
+      unprovide.push(service.provide("economy.account.transfer", (input) => handleTransfer(input)));
+      unprovide.push(service.provide("economy.stats.query", (input) => handleStatsQuery(input)));
+
+      if (cfg.reconcileIntervalTicks > 0) {
+        reconcileRunId = system.runInterval(() => void runReconcile(), cfg.reconcileIntervalTicks);
+      }
+      retryRunId = system.runInterval(() => void flushPendingArchive(), 200);
+      debug.i("Economy", `init objective=${cfg.objectiveId} unit=${cfg.unitName}`);
     },
     cleanup() {
-      stopMonthlyReport();
-      debug.i("Economy", "stop");
+      for (const off of unprovide.splice(0, unprovide.length)) {
+        try {
+          off();
+        } catch {
+          /* ignore */
+        }
+      }
+      if (reconcileRunId !== undefined) {
+        try {
+          system.clearRun(reconcileRunId);
+        } catch {
+          /* ignore */
+        }
+        reconcileRunId = undefined;
+      }
+      if (retryRunId !== undefined) {
+        try {
+          system.clearRun(retryRunId);
+        } catch {
+          /* ignore */
+        }
+        retryRunId = undefined;
+      }
+      void flushPendingArchive();
+      debug.i("Economy", "cleanup");
     },
   },
 });
-
-export type {
-  EconomyAccountRow,
-  EconomyIdempotencyRow,
-  EconomyTransactionRow,
-} from "./types.js";
-
-export { economy, ECONOMY_UNIT } from "./client.js";
-export type {
-  AccountGetInput,
-  AccountMutateInput,
-  AccountTransferInput,
-  DailyTaskRow,
-  DailyTaskSubmitInput,
-  DailyTaskSubmitResult,
-  DailyTasksListInput,
-  DailyTasksListResult,
-  EconomyAccountView,
-  EconomyMutateResult,
-  MonthlyStats,
-} from "./client.js";

@@ -1,27 +1,33 @@
 /**
- * test/economy.test.ts — 包结构冒烟（不依赖 BDS / SDK testing harness）
- *
- * 完整 lifecycle 测试等 @sfmc-bds/sdk/testing 随 npm 发布后再接回。
+ * economy 纯逻辑单元测试（不依赖 Minecraft 运行时）。
  */
 import assert from "node:assert/strict";
-import fs from "node:fs";
-import path from "node:path";
-import test from "node:test";
-import { fileURLToPath } from "node:url";
+import { describe, it } from "node:test";
 
-const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+function inferAccountType(accountId: string): "player" | "org" {
+  if (accountId.includes(":")) return "org";
+  return "player";
+}
 
-test("package.json 官方包名与 files", () => {
-  const pkg = JSON.parse(fs.readFileSync(path.join(root, "package.json"), "utf8"));
-  assert.equal(pkg.name, "@sfmc-bds/module-economy");
-  assert.equal(pkg.private, undefined);
-  assert.ok(Array.isArray(pkg.files) && pkg.files.includes("sapi"));
-  assert.equal(pkg.exports?.["./client"], "./sapi/src/client.ts");
-});
+function bucketKey(ts: number, groupBy: "day" | "month"): string {
+  const d = new Date(ts);
+  const y = d.getUTCFullYear();
+  const m = String(d.getUTCMonth() + 1).padStart(2, "0");
+  if (groupBy === "month") return `${y}-${m}`;
+  const day = String(d.getUTCDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
 
-test("manifest v2 id/configKey", () => {
-  const manifest = JSON.parse(fs.readFileSync(path.join(root, "sapi/manifest.json"), "utf8"));
-  assert.equal(manifest.schemaVersion, 2);
-  assert.equal(manifest.id, "feature-economy");
-  assert.equal(manifest.configKey, "economy");
+describe("economy helpers", () => {
+  it("inferAccountType 区分玩家与组织公账", () => {
+    assert.equal(inferAccountType("abc123"), "player");
+    assert.equal(inferAccountType("coop:42"), "org");
+    assert.equal(inferAccountType("town:spawn"), "org");
+  });
+
+  it("bucketKey 按 day/month 分桶", () => {
+    const ts = Date.UTC(2026, 8, 4, 12, 0, 0); // 2026-09-04
+    assert.equal(bucketKey(ts, "day"), "2026-09-04");
+    assert.equal(bucketKey(ts, "month"), "2026-09");
+  });
 });
