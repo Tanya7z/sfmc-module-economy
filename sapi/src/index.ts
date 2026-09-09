@@ -1,32 +1,18 @@
 /**
  * @sfmc-bds/module-economy — 计分板权威经济中枢
  *
- * 生命周期：registerPermissions → registerCommands → registerEvents → init
+ * 生命周期：原生命令顶层注册；启动后依次注册权限与事件并初始化
  * 对外仅经 service.provide：account.get/credit/debit/transfer + stats.query
  */
 
 import { system } from "@minecraft/server";
-import { config } from "@sfmc-bds/sdk/sapi/config";
 import { ModuleRegistry } from "@sfmc-bds/sdk/module-loader";
+import { config } from "@sfmc-bds/sdk/sapi/config";
 import { debug } from "@sfmc-bds/sdk/sapi/runtime";
 import { service } from "@sfmc-bds/sdk/sapi/service";
-import {
-  defineEconomyTables,
-  flushPendingArchive,
-  reconcileAccount,
-} from "./archive.js";
-import {
-  configureScoreboard,
-  ensureObjective,
-  listScoreboardBalances,
-} from "./scoreboard.js";
-import {
-  handleCredit,
-  handleDebit,
-  handleGet,
-  handleStatsQuery,
-  handleTransfer,
-} from "./services.js";
+import { defineEconomyTables, flushPendingArchive, reconcileAccount } from "./archive.js";
+import { configureScoreboard, ensureObjective, listScoreboardBalances } from "./scoreboard.js";
+import { handleCredit, handleDebit, handleGet, handleStatsQuery, handleTransfer } from "./services.js";
 
 const MODULE_ID = "economy";
 
@@ -67,9 +53,6 @@ ModuleRegistry.register({
   lifecycle: {
     registerPermissions() {
       // 无玩家命令面
-    },
-    registerCommands() {
-      // 无
     },
     registerEvents() {
       // 无原生事件订阅
