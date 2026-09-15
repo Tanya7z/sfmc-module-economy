@@ -4,7 +4,7 @@
 
 import { db } from "@sfmc-bds/sdk/sapi/db";
 import { debug } from "@sfmc-bds/sdk/sapi/runtime";
-import { inferAccountType } from "./scoreboard.js";
+import { inferAccountType } from "./account-id.js";
 
 export const ACCOUNTS_TABLE = "sfmc_economy_accounts";
 export const TX_TABLE = "sfmc_economy_transactions";

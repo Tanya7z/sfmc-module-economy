@@ -3,11 +3,11 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-
-function inferAccountType(accountId: string): "player" | "org" {
-  if (accountId.includes(":")) return "org";
-  return "player";
-}
+import {
+  fromFakePlayerName,
+  inferAccountType,
+  toFakePlayerName,
+} from "../sapi/src/account-id.ts";
 
 function bucketKey(ts: number, groupBy: "day" | "month"): string {
   const d = new Date(ts);
@@ -23,6 +23,13 @@ describe("economy helpers", () => {
     assert.equal(inferAccountType("abc123"), "player");
     assert.equal(inferAccountType("coop:42"), "org");
     assert.equal(inferAccountType("town:spawn"), "org");
+  });
+
+  it("组织公账假名用点号，避免 Script API 把冒号当命名空间身份", () => {
+    assert.equal(toFakePlayerName("coop:c_mu2pnc6s_gt6o"), "coop.c_mu2pnc6s_gt6o");
+    assert.equal(fromFakePlayerName("coop.c_mu2pnc6s_gt6o"), "coop:c_mu2pnc6s_gt6o");
+    assert.equal(toFakePlayerName("abc123"), "abc123");
+    assert.equal(fromFakePlayerName("steve"), "steve");
   });
 
   it("bucketKey 按 day/month 分桶", () => {

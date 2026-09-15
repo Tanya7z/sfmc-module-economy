@@ -3,7 +3,10 @@
  * 支持在线玩家实体与假名参与者（组织公账如 coop:<cid>）。
  */
 
-import { Player, world, type ScoreboardObjective } from "@minecraft/server";
+import { Player, ScoreboardIdentityType, world, type ScoreboardObjective } from "@minecraft/server";
+import { fromFakePlayerName, toFakePlayerName } from "./account-id.js";
+
+export { inferAccountType } from "./account-id.js";
 
 let objectiveId = "sfmc_money";
 let objectiveDisplay = "节操";
@@ -24,28 +27,27 @@ export function ensureObjective(): ScoreboardObjective {
   return obj;
 }
 
-/** 将 accountId 解析为计分板参与者（在线玩家优先）。 */
+/** 将 accountId 解析为计分板参与者（在线玩家优先，组织公账走点号假名）。 */
 export function resolveParticipant(accountId: string): Player | string {
   for (const p of world.getAllPlayers()) {
     if (p.id === accountId) return p;
     if (`player:${p.id}` === accountId) return p;
     if (p.name === accountId) return p;
   }
-  return accountId;
+  return toFakePlayerName(accountId);
 }
 
-/** 推断账户类型。 */
-export function inferAccountType(accountId: string): "player" | "org" {
-  if (accountId.includes(":")) return "org";
-  return "player";
-}
-
-/** 读权威余额；无记录视为 0。 */
+/** 读权威余额；无记录或身份尚未建分时视为 0。 */
 export function getBalance(accountId: string): number {
   const obj = ensureObjective();
   const participant = resolveParticipant(accountId);
-  const score = obj.getScore(participant);
-  return typeof score === "number" ? score : 0;
+  try {
+    const score = obj.getScore(participant);
+    return typeof score === "number" ? score : 0;
+  } catch {
+    // Script API：未建分的假名会抛 Failed to resolve identity，规格约定视为 0
+    return 0;
+  }
 }
 
 /** 写权威余额（非负整数）。 */
@@ -62,8 +64,12 @@ export function listScoreboardBalances(): Array<{ accountId: string; balance: nu
   const obj = ensureObjective();
   const out: Array<{ accountId: string; balance: number }> = [];
   for (const info of obj.getScores()) {
-    const id = info.participant.displayName || String(info.participant.id);
-    out.push({ accountId: id, balance: info.score });
+    const display = info.participant.displayName || String(info.participant.id);
+    const accountId =
+      info.participant.type === ScoreboardIdentityType.FakePlayer
+        ? fromFakePlayerName(display)
+        : display;
+    out.push({ accountId, balance: info.score });
   }
   return out;
 }
