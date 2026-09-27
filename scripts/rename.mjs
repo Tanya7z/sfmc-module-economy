@@ -114,7 +114,7 @@ function main() {
   console.log(`\n[rename] 完成。新 id: ${folderId}（manifest id: ${logicalId}）`);
   console.log(`[rename] npm: ${pkgName}`);
   console.log("[rename] 接下来:");
-  console.log("          npm install && npm run typecheck");
+  console.log("          pnpm install && pnpm run typecheck");
   console.log(`          （主仓）sfmc mod install ${folderId} --from dir:${ROOT} --link`);
 }
 
